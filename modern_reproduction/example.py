@@ -49,6 +49,43 @@ def split(polygons, seed=42, fraction=0.05):
     return train, val, sorted(held)
 
 
+def balanced_split(polygons, labels, seed=42, per_class=4):
+    """Select exactly four observations per class, keeping polygons intact.
+
+    An exploratory split for the small public example, not the paper's split.
+    """
+    groups = {}
+    for polygon, label in zip(polygons, labels):
+        polygon, label = int(polygon), int(label)
+        if polygon in groups and groups[polygon][0] != label:
+            raise ValueError('Polygon contains multiple labels')
+        if polygon in groups:
+            groups[polygon] = (label, groups[polygon][1] + 1)
+        else:
+            groups[polygon] = (label, 1)
+
+    rng = random.Random(seed)
+    held = []
+    for label in np.unique(labels):
+        candidates = [(pid, n) for pid, (cls, n) in groups.items() if cls == label]
+        rng.shuffle(candidates)
+        choices = {0: []}
+        for pid, n in candidates:
+            for count, ids in list(choices.items()):
+                new_count = count + n
+                if new_count <= per_class and new_count not in choices:
+                    choices[new_count] = ids + [pid]
+        if per_class not in choices:
+            raise ValueError(f'Cannot hold out {per_class} whole-polygon observations of class {label}')
+        held.extend(choices[per_class])
+    val = np.flatnonzero(np.isin(polygons, held))
+    train = np.flatnonzero(~np.isin(polygons, held))
+    if set(polygons[train]) & set(polygons[val]):
+        raise AssertionError('Polygon leakage across train and validation')
+    assert len(val) == per_class * len(np.unique(labels))
+    return train, val, sorted(held)
+
+
 def normalizer(x):
     low, high = np.percentile(x, [2, 98], axis=(0, 1))
     if not np.all(high > low):
@@ -56,14 +93,14 @@ def normalizer(x):
     return low, high
 
 
-def prepare(train_csv, test_csv, seed, protocol):
+def prepare(train_csv, test_csv, seed, protocol, validation_split):
     x, polygons, labels = load(train_csv)
     xt, test_polygons, yt = load(test_csv)
     if np.intersect1d(polygons, test_polygons).size:
         raise ValueError('Polygon overlap between train and test')
     if not np.array_equal(np.unique(labels), np.arange(13)):
         raise ValueError('Expected 13 classes')
-    t, v, val_ids = split(polygons, seed)
+    t, v, val_ids = (balanced_split(polygons, labels, seed) if validation_split == 'balanced-20pct' else split(polygons, seed))
     if len(np.unique(labels[t])) != 13:
         raise ValueError('Validation split removed a class from training')
     lo, hi = normalizer(x[t] if protocol == 'train-only' else x)
@@ -107,7 +144,7 @@ def run(args):
     if identity != BLOBS:
         raise ValueError(f'Inputs differ from published example CSVs: {identity}')
     tr, y, va, yv, te, yt, test_poly, val_ids, lo, hi = prepare(
-        data / 'train_dataset.csv', data / 'test_dataset.csv', args.seed, args.protocol)
+        data / 'train_dataset.csv', data / 'test_dataset.csv', args.seed, args.protocol, args.validation_split)
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
     net = model()
@@ -115,7 +152,7 @@ def run(args):
                       batch_size=32, verbose=2, shuffle=True, callbacks=[
         keras.callbacks.ModelCheckpoint(str(out / 'best.keras'), monitor='val_loss',
                                         save_best_only=True),
-        keras.callbacks.EarlyStopping(monitor='val_loss', patience=0),
+        keras.callbacks.EarlyStopping(monitor='val_loss', patience=args.patience),
     ])
     net = keras.models.load_model(out / 'best.keras')
     predictions = np.argmax(net.predict(te, verbose=0), axis=1)
@@ -132,6 +169,9 @@ def run(args):
         'input_git_blobs': identity,
         'model': 'Archi_3CONV64_1FC256',
         'protocol': args.protocol, 'seed': args.seed,
+        'validation_split': args.validation_split, 'early_stopping_patience': args.patience,
+        'validation_class_counts': np.bincount(yv, minlength=13).tolist(),
+        'training_class_counts': np.bincount(y, minlength=13).tolist(),
         'validation_polygon_ids': val_ids,
         'samples': {'train': len(y), 'validation': len(yv), 'test': len(yt)},
         'normalization_p2': lo.tolist(), 'normalization_p98': hi.tolist(),
@@ -154,5 +194,8 @@ if __name__ == '__main__':
     p.add_argument('--output', required=True)
     p.add_argument('--protocol', choices=['train-only', 'pre-split'], required=True)
     p.add_argument('--seed', type=int, default=42)
-    p.add_argument('--epochs', type=int, default=20)
+    p.add_argument('--epochs', type=int, default=50)
+    p.add_argument('--patience', type=int, default=10)
+    p.add_argument('--validation-split', choices=['original-5pct', 'balanced-20pct'],
+                   default='balanced-20pct')
     run(p.parse_args())

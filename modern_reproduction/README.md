@@ -28,3 +28,20 @@ the legacy Keras training run is not expected across versions or backends.
 The workflow `Reproduce TempCNN example (manual)` runs both variants on demand,
 not on pushes or external pull requests. It uses public repository data and
 can be disabled without affecting any historical code.
+
+
+## Follow-up diagnostic after run #1
+
+The first run retained the historical 5% polygon holdout. Its 13 validation
+observations represented only five of the thirteen crop classes. With the
+historical zero-patience early stopping rule, training ended after two epochs:
+27/260 and 29/260 correct test predictions (pre-split and train-only scaling).
+These results do not validate or refute the published method.
+
+The next manual experiment uses a class-balanced validation set: four
+observations per class, 52 total, with whole polygons held out. Both
+normalization protocols use the same split, initialization seed, learning
+schedule and 10-epoch stopping patience (up to 50 epochs). This is an
+**exploratory** design, not the original paper's experimental protocol.
+
+For the initial protocol, pass: --validation-split original-5pct --patience 0 --epochs 20.
