@@ -1,0 +1,50 @@
+name: TempCNN example validation study
+
+on:
+  push:
+    branches:
+      - research/example-validation-study
+    paths:
+      - 'modern_reproduction/study.py'
+      - 'modern_reproduction/test_study.py'
+      - 'modern_reproduction/example.py'
+      - '.github/workflows/validation-study.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      KERAS_BACKEND: torch
+      OMP_NUM_THREADS: '2'
+      MKL_NUM_THREADS: '2'
+      CUDA_VISIBLE_DEVICES: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install 'torch==2.10.0' --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'keras==3.15.1' 'numpy==2.5.4'
+      - name: Data and methodological tests
+        run: python -m unittest discover -s modern_reproduction -p 'test_*.py' -v
+      - name: Paired multi-seed study
+        run: python modern_reproduction/study.py --seeds 7 42 101 --epochs 50 --patience 10 --output study-results
+      - name: Save audit results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tempcnn-validation-study
+          retention-days: 14
+          path: |
+            study-results/**/summary.json
+            study-results/**/result.json
+            study-results/**/predictions.csv
+            example/train_dataset.csv
+            example/test_dataset.csv
